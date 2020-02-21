@@ -1,8 +1,10 @@
-from GLV import *
 from matplotlib.offsetbox import AnchoredText
 from scipy.optimize import curve_fit
+from scipy import stats, signal
 
 from generate_timeseries import *
+from smooth_spline import get_natural_cubic_spline_model
+import statsmodels.formula.api as smf
 
 def noise_color(data_input): # TODO previously noise_slope
     """ Returns panda dataframe with the slope of the noise of the species of which the timeseries is given in input file f"""
@@ -38,7 +40,7 @@ def noise_color(data_input): # TODO previously noise_slope
         frq, f = signal.periodogram(data[c])
 
         frq = np.log10(frq[1:])  # cut zero -> log(0) = -INF
-        f = np.log10(np.abs(f)[1:])
+        f = np.log10(np.abs(f.astype(complex))[1:])
 
         frq = frq[~np.isnan(f)]
         f = f[~np.isnan(f)]
@@ -47,7 +49,7 @@ def noise_color(data_input): # TODO previously noise_slope
         f = f[np.isfinite(f)]
 
         if len(frq) > 5:
-            p_spline = get_natural_cubic_spline_model(frq, f, minval=min(frq), maxval=max(frq), n_knots=3.5)
+            p_spline = get_natural_cubic_spline_model(frq, f, minval=min(frq), maxval=max(frq), n_knots=4)
 
             y = p_spline.predict(frq)
 
@@ -653,7 +655,7 @@ if False:
             else:
                 print('path not found')
 
-if __name__ == "bla": #""__main__":
+if __name__ == "__main__":
     #generate_timeseries_noise_loop_parameters()
     #compare_noise_profiles('results2/data_SIS_')
     #compare_noise_implementations()

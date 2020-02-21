@@ -117,7 +117,6 @@ def neutral_covariance_test(ts, ntests=None, regress='f', formula='DF~f+I(f**2)'
 
     S = ts.shape[1]  # number of species
     m = ts.shape[0]  # number of timepoints
-    print("CVT test: number of timepoints: %d, number of species: %d" % (m, S))
 
     # check if timeseries are normalized
     sum_ts = np.sum(ts, axis=1)

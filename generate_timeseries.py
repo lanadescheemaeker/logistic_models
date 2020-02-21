@@ -1,21 +1,33 @@
 import numpy as np
 import pandas as pd
-from brownian import *
-from noise_parameters import *
+from brownian import brownian
+from noise_parameters import NOISE, MODEL
 import time
 
 def make_params(steadystate,
                 interaction=0, selfint=1,
                 immigration=0, init_dev=0.1,
                 noise=1e-1, connectivity=1):
+    """
+    Return set of parameters: interaction matrix, growth rate, immigration rate, noise and initial condition
+
+    :param steadystate: steady state, list of floats
+    :param interaction: interaction strength, float
+    :param selfint: self interaction, float or list of floats
+    :param immigration: immigration rate, float or list of floats
+    :param init_dev: deviation from steady state for initial condition, float
+    :param noise: amount of noise, float
+    :param connectivity: connectivity, float between 0 and 1
+    :return: dictionary of parameters
+    """
     params = {}
 
-    N = len(steadystate)
+    n = len(steadystate)
 
     if interaction == 0:
-        omega = np.zeros([N, N]);
+        omega = np.zeros([n, n]);
     else:
-        omega = np.random.normal(0, interaction, [N,N])
+        omega = np.random.normal(0, interaction, [n,n])
         omega *= np.random.choice([0, 1], omega.shape, p=[1-connectivity, connectivity])
     np.fill_diagonal(omega, -selfint)
 
@@ -34,9 +46,22 @@ def make_params(steadystate,
 
     return params
 
-def is_stable(steadystate, interaction_matrix):
-    # Jacobian
+def Jacobian(intmat, ss, K):
+    J = intmat * ss.reshape([np.prod(ss.shape), 1])
 
+    return J
+
+# TODO check shape of steadystate
+def is_stable(steadystate, interaction_matrix):
+    """
+    Checks whether steady state is stable solution of generalized Lotka Volterra system with given interaction matrix
+
+    :param steadystate: np.array with steady state
+    :param interaction_matrix: np.array with interaction matrix
+    :return: bool: stability of steady state
+    """
+
+    # Jacobian
     Jac = interaction_matrix * steadystate
 
     if np.any(np.real(np.linalg.eigvals(Jac)) > 0):
@@ -45,12 +70,13 @@ def is_stable(steadystate, interaction_matrix):
         return True
 
 def test_validity_Jacobian():
-    def Jacobian(intmat, ss, K):
-        J = intmat * ss  # + np.diag(K + np.diag(intmat)*ss.flatten())
+    """
+    Test to check whether the Jacobian used in the is_stable function is correctly defined
+    Print statements
+    :return: bool if definition is correct
+    """
 
-        return J
-
-    def numJac(intmat, ss, K):
+    def numeric_Jacobian(intmat, ss, K):
         epsilon = 1e-5
 
         def f(x):
@@ -65,16 +91,19 @@ def test_validity_Jacobian():
 
         return J
 
-    N = 6
+    n = 6
 
-    ss = np.random.uniform(0, 5, [N, 1])  # np.ones([N,1])
-    intmat = np.random.normal(0, 3, [N, N])
+    ss = np.random.uniform(0, 5, [n, 1])  # np.ones([N,1])
+    intmat = np.random.normal(0, 3, [n, n])
     K = - np.dot(intmat, ss)
 
-    print(Jacobian(intmat, ss, K))
-    print(numJac(intmat, ss, K))
-    print(intmat * ss)
-    print(numJac(intmat, ss, K) - intmat)
+    Jac = Jacobian(intmat, ss, K)
+    numJac = numeric_Jacobian(intmat, ss, K)
+
+    print("Jacobian", Jac)
+    print("numeric Jacobian", numJac)
+    print("maximal relative difference", np.max(abs((numJac - Jac)/Jac)))
+    return np.max(abs((numJac - Jac)/Jac)) < 1e-6
 
 class Timeseries():
     def __init__(self, params, model = MODEL.GLV, noise_implementation=NOISE.LANGEVIN_LINEAR,
@@ -179,19 +208,32 @@ class Timeseries():
             self.bm = brownian(np.zeros(len(self.params['initial_condition'])),
                                int(self.T /self.dt), self.dt, 1, out=None)
 
+        # dataframe where timeseries will be saved
+        self.x_ts = pd.DataFrame(columns=['time'] + ['species_%d' % i for i in range(1, self.Nspecies + 1)])
+        self.x_ts['time'] = (self.dt * (self.tskip + 1)
+                             * np.arange(0, int(self.T / (self.dt * (self.tskip + 1)))) )
+        self.x_ts.set_index('time', inplace=True)
+
+        # set initial condition
+        self.x_ts.iloc[0] = self.x.flatten()
+
         # Integrate ODEs according to model and noise
-        for i in range(1, int(self.T / self.dt)):
-            self.add_step(i)
+        for i, x_t in enumerate(self.x_ts.index.tolist()[1:]):
+            for j in range(self.tskip + 1):
+                self.add_step(i*(self.tskip + 1) + j)
+
+                if np.any(np.isnan(self.x) | ~np.isfinite(self.x)):
+                    self.x_ts.reset_index(inplace=True)
+                    return
 
             # Save abundances
-            if self.f != 0 and i % (self.tskip + 1) == 0:
-                self.write_abundances_to_file(i)
+            if self.f != 0:
+                self.write_abundances_to_file(i*(self.tskip + 1) + j)
 
-            if i % (self.tskip + 1) == 0:
-                self.x_ts = np.hstack((self.x_ts, self.x))
+            self.x_ts.loc[x_t] = self.x.flatten()
 
-        self.x_ts = np.vstack((self.dt * (self.tskip + 1) * np.arange(len(self.x_ts[0]))[np.newaxis, :], self.x_ts))
-        self.x_ts = pd.DataFrame(self.x_ts.T, columns=['time'] + ['species_%d' % i for i in range(1, self.Nspecies + 1)])
+        self.x_ts.reset_index(inplace=True)
+        return
 
     def add_step(self, i):
         if self.model == MODEL.GLV:
@@ -226,8 +268,9 @@ class Timeseries():
 
     def deterministic_step(self):
         if self.model == MODEL.GLV:
-            dx = (self.params['interaction_matrix'].dot(self.x) * self.x + self.params['immigration_rate'] +
-                  self.params['growth_rate'] * self.x) * self.dt
+            with np.errstate(over='ignore'):
+                dx = (self.params['interaction_matrix'].dot(self.x) * self.x + self.params['immigration_rate'] +
+                    self.params['growth_rate'] * self.x) * self.dt
 
             return dx
         elif self.model == MODEL.QSMI:
@@ -302,8 +345,7 @@ class Timeseries():
     def endpoint(self):
         return self.x
 
-
-def main():
+def test_timeseries():
     print('test Timeseries')
 
     N = 50
@@ -328,8 +370,8 @@ def main():
 
     params['noise_linear'] = 1e-1
 
-    ts = Timeseries(params, noise_implementation=NOISE.LANGEVIN_LINEAR,
-                    dt=0.01, tskip=4, T=100.0, seed=int(time.time()))
+    ts = Timeseries(params, noise_implementation=NOISE.LANGEVIN_LINEAR, dt=0.01, tskip=4, T=100.0,
+                    seed=int(time.time()))
 
     print("timeseries")
     print(ts.timeseries.head())
@@ -339,287 +381,9 @@ def main():
 
     return ts
 
+def main():
+    #test_validity_Jacobian()
+    test_timeseries()
+
 if __name__ == "__main__":
     main()
-
-# old code
-
-""" 
-def check_input_parameters(params, model, noise_implementation):
-    # Function to check if all necessary parameters where provided, raises error if parameters are missing
-
-    if model == MODEL.GLV:
-        parlist = ['interaction_matrix', 'immigration_rate', 'growthrate', 'initial_condition']
-
-        if 'LINEAR' in noise_implementation.name:
-            parlist += ['noise_linear']
-        elif 'SQRT' in noise_implementation.name:
-            parlist += ['noise_sqrt']
-        elif 'INTERACTION' in noise_implementation.name:
-            parlist += ['noise_interaction']
-
-    elif model == MODEL.QSMI:
-        parlist = ['psi', 'd', 'g', 'dm', 'kappa', 'phi', 'initcond', 'noise']
-
-    for par in parlist:
-        if not par in params:
-            raise KeyError('Parameter %s needs to be specified for the %s model and %s noise implementation.' % (
-                par, model.name, noise_implementation.name))
-
-    # check whether matrix shapes are correct
-
-    if model == MODEL.GLV:
-        if not np.all(len(row) == len(params['interaction_matrix']) for row in params['interaction_matrix']):
-            raise ValueError('Interaction matrix is not square.')
-
-        for parname in ['immigration_rate', 'growthrate', 'initial_condition']:
-            if np.any(params[parname].shape != (params['interaction_matrix'].shape[0], 1)):
-                raise ValueError('%s has the incorrect shape: %s instead of (%d,1)'
-                                 % (parname, str(params[parname].shape), params['interaction_matrix'].shape[0]))
-
-
-def run_timeseries_noise(params, model = MODEL.GLV, noise_implementation=NOISE.LANGEVIN_LINEAR,
-                         dt=0.01, T=100, tskip = 0,
-                         f=0, ts = True, seed=None):
-
-    # Set seed for random number generator
-    if seed == None:
-        np.random.seed(int(time.time()))
-    else:
-        np.random.seed(seed)
-
-    # Verify if all parameters are given, otherwise raise error.
-    check_input_parameters(params, model, noise_implementation)
-
-    # Set parameters.
-    if model == MODEL.GLV:
-        omega, mu, g, initcond = params['interaction_matrix'], params['immigration_rate'], \
-                                     params['growthrate'], params['initial_condition']
-
-        for noise in ['noise_linear', 'noise_sqrt', 'noise_interaction']:
-            if noise in params:
-                locals()[noise] = params[nois]
-
-        Nspecies = len(omega) # number of species
-        Nmetabolites = 0 # number of metabolites, 0 in the GLV models
-        x = np.copy(initcond) # set initial state
-    elif model == MODEL.QSMI:
-        psi, d, g, dm, kappa, phi, initcond, noise =  params['psi'], params['d'], params['g'], params['dm'], \
-                                                   params['kappa'], params['phi'], params['initcond'], params['noise']
-
-        Nspecies = len(d) # number of species
-        Nmetabolites = len(dm) # number of metabolites
-        x = np.copy(initcond)[:len(d)] # initial state species
-        y = np.copy(initcond)[len(d):] # initial state metabolites
-
-    # Write down header in file
-    if f != 0:
-        with open(f, "a") as file:
-            file.write("time")
-            for k in range(1, Nspecies + 1):
-                file.write(",species_%d" % k)
-            for k in range(1, Nmetabolites + 1):
-                file.write(",metabolite_%d" % k)
-
-            file.write("\n")
-
-            file.write("%.3E" % 0)
-            for k in initcond:
-                file.write(",%.3E" % k)
-            file.write("\n")
-
-    # To save all points in timeseries, make new variable x_ts
-    if ts == True:
-        x_ts = np.copy(x)
-
-    # If noise is Ito, first generate brownian motion.
-    if noise_implementation == NOISE.ARATO_LINEAR:
-        xt = np.zeros_like(initcond)
-        bm = brownian(np.zeros(len(initcond)), int(T /dt), dt, 1, out=None)
-
-    # Integrate ODEs according to model and noise
-    for i in range(1, int(T / dt)):
-        if model == MODEL.GLV:
-            if noise_implementation == NOISE.LANGEVIN_LINEAR:
-                dx = (omega.dot(x) * x + mu + g * x) * dt
-                x += dx + noise * x * np.sqrt(dt) * np.random.normal(0, 1, x.shape)
-            elif noise_implementation == NOISE.GROWTH_AND_INTERACTION_LINEAR:
-                dx = (omega.dot(x) * x + mu + g * x) * dt
-                x += dx + noise_linear * x * np.sqrt(dt) * np.random.normal(0, 1, x.shape) \
-                     + (noise_interaction * np.random.normal(0, 1, omega.shape)).dot(x) * x * np.sqrt(dt)
-            elif noise_implementation == NOISE.LANGEVIN_SQRT:
-                x += (omega.dot(x) * x + mu + g * x) * dt + noise * np.sqrt(x) * np.sqrt(dt) * np.random.normal(0, 1, x.shape)
-            elif noise_implementation == NOISE.LANGEVIN_LINEAR_SQRT:
-                x += (omega.dot(x) * x + mu + g * x) * dt + noise_linear * x * np.sqrt(dt) * np.random.normal(0, 1, x.shape) \
-                     + noise_sqrt * np.sqrt(x) * np.sqrt(dt) * np.random.normal(0, 1, x.shape)
-            elif noise_implementation == NOISE.SQRT_MILSTEIN:
-                dW = np.sqrt(dt)*np.random.normal(0,1, x.shape)
-                x += (omega.dot(x) * x + mu + g * x) * dt + np.sqrt(noise * x) * dW + noise**2 / 4 * (dW**2 - dt**2)
-            elif noise_implementation == NOISE.LANGEVIN_CONSTANT:
-                x += (omega.dot(x) * x + mu + g * x) * dt + noise * np.sqrt(dt) * np.random.normal(0, 1, x.shape)
-            elif noise_implementation == NOISE.RICKER_LINEAR:
-                if noise == 0:
-                    b = np.ones(x.shape)
-                else:
-                    b = np.exp(noise * np.sqrt(dt) * np.random.normal(0, 1, x.shape))
-                x = b * x * np.exp(omega.dot(x + np.linalg.inv(omega).dot(g)) * dt)
-            elif noise_implementation == NOISE.ARATO_LINEAR:
-                xt += x * dt
-
-                t = i * dt
-
-                Y = g * t - noise ** 2 / 2 * t + omega.dot(xt) + noise * bm[:, i].reshape(
-                    x.shape)  # noise * np.random.normal(0, 1, initcond.shape)
-                x = initcond * np.exp(Y)
-
-            x = x.clip(min=0)
-
-        if model == MODEL.QSMI:
-            if noise_implementation == NOISE.LANGEVIN_CONSTANT:
-                dx = x*(psi.dot(y) - d)
-                dy = g - dm*y - y*kappa.dot(x) + ((phi.dot(x)).reshape([Nmetabolites,Nmetabolites])).dot(y)
-
-                x += dx*dt
-                y += dy*dt #+ noise * np.sqrt(dt) * np.random.normal(0, 1, y.shape)
-
-                x = x.clip(min=0)
-                y = y.clip(min=0)
-
-        # Save abundances
-        if f != 0 and i % (tskip + 1) == 0:
-            with open(f, "a") as file:
-                file.write("%.5E" % (i * dt))
-                for k in x:
-                    file.write(",%.5E" % k)
-                if model == MODEL.QSMI:
-                    for k in y:
-                        file.write(",%.5E" % k)
-                file.write("\n")
-        if ts == True and i % (tskip + 1) == 0:
-            x_ts = np.hstack((x_ts, x))
-
-    # return timeseries if ts = True, else return only endpoint
-    if ts == True:
-        x_ts = np.vstack((dt * (tskip+1)*np.arange(len(x_ts[0]))[np.newaxis, :], x_ts))
-        x_ts = pd.DataFrame(x_ts.T, columns=['time'] + ['species_%d' % i for i in range(1,Nspecies+1)])
-        return x_ts
-    else:
-        return x
-
-def generate_timeseries_noise(par=[0, 0, 0], fts=None, fomega=None, fg=None, fmu=None, SIS=False, noise=0.1, noise_implementation=NOISE.LANGEVIN_SQRT):
-    connectance, intdiv, r = par
-
-    np.random.seed(r)
-
-    S = 100  # 40
-    distromega = Distribution.NORMAL  # UNIFORM #NORMAL
-    distrgrowth = Distribution.UNIFORM
-    growthrate = 1
-    minmigration = 0
-    maxmigration = 0  # 0.1
-
-    SISvector = np.ones(S)  # 0.001
-
-    if SIS:
-        SISvector[0] = 200
-
-    initcond = np.zeros(S)
-
-    # get variables if given in files
-
-    omega_given, mu_given, g_given = False, False, False
-
-    if isinstance(fomega, np.ndarray):
-        omega = fomega
-        omega_given = True
-    elif fomega != None:
-        if isinstance(fomega, str) and os.path.exists(fomega):
-            if fomega.endswith('.csv'):
-                omega = pd.read_csv(fomega, index_col=0).values
-                omega_given = True
-            elif fomega.endswith('.txt'):
-                omega = np.loadtxt(fomega)
-                omega_given = True
-
-    if fmu != None:
-        if os.path.exists(fmu):
-            mu = pd.read_csv(fmu, index_col=0).values
-            mu_given = True
-
-    if isinstance(fg, np.ndarray):
-        g = fg.reshape([S, 1])
-        g_given = True
-    elif fg != None:
-        if isinstance(fg, str) and os.path.exists(fg):
-            if fomega.endswith('.csv'):
-                g = pd.read_csv(fg, index_col=0).values.reshape([S,1])
-                g_given = True
-            elif fomega.endswith('.txt'):
-                g = np.loadtxt(fg).reshape([S,1])
-                g_given = True
-
-    # Look for non-zero steady state
-
-    while np.sum(initcond != 0) < 2 or np.any(np.isnan(initcond)) or (SIS and initcond[0]==0):
-        # get new variables if not yet given
-
-        if not omega_given:
-            omega = interactionmatrix(S, intdiv, distromega, connectance, SISvector)
-
-        if not mu_given:
-            mu = np.random.uniform(minmigration, maxmigration, [S, 1])
-
-        if not g_given:
-            if distrgrowth == Distribution.CONSTANT:
-                g = np.full([S, 1], growthrate)
-            elif distrgrowth == Distribution.UNIFORM:
-                g = np.random.uniform(0, growthrate, [S, 1])
-
-        initcond = np.random.uniform(0, 1, [S,1])
-
-        dspecies = omega.dot(initcond) * initcond + mu + g * initcond
-
-        while not (np.all(initcond == 0) or np.any(np.isnan(initcond))) and np.nanmax(
-                abs((dspecies / initcond)[initcond != 0])) > 1e-1: #1e-3:
-            if np.all(initcond == 0):
-                print("Initial condition is zero for all species.")
-            elif np.any(np.isnan(initcond)):
-                print("The initial condition of one of the species is nan.")
-            else:
-                print("Not yet in steady state, maximum absolute derivative is", np.nanmax(
-                abs((dspecies / initcond)[initcond != 0])))
-
-            initcond = run_timeseries(omega, mu, g, initcond) #, f='testje.csv')
-
-            #plot_timeseries('testje.csv')
-            #os.remove('testje.csv')
-            #plt.show()
-
-            initcond[initcond < 1e-30] = 0
-
-            dspecies = omega.dot(initcond) * initcond + mu + g * initcond
-
-    # Perform stochastic simulation.
-
-    if omega_given == False and fomega != None:
-        pd.DataFrame(omega).to_csv(fomega)
-    if mu_given == False and fmu != None:
-        pd.DataFrame(mu).to_csv(fmu)
-    if g_given == False and fg != None:
-        pd.DataFrame(g).to_csv(fg)
-
-    run_timeseries_Langevin(omega, mu, g, initcond, noise, fts, noise_implementation)
-
-def generate_timeseries_noise_loop_parameters():
-    for i, ii in zip([0.1, 0.25, 0.4, 0.6, 0.8], [0, 2, 5, 7, 1]):
-        for j, jj in zip([0.02, 0.05, 0.1, 0.15, 0.2], [0, 2, 5, 7, 1]):
-            for l in ['a', 'b', 'c', 'd', 'e']:
-                #print('glv/noise/data_SIS_wide_%d%d%s.csv' % (ii, jj, l))
-                if not os.path.isfile('glv/test/data_SIS_wide_%d%d%s.csv' % (ii, jj, l)):
-                    fts = 'glv/test/data_SIS_%d%d%s.csv' % (ii, jj, l)
-                    fomega = 'glv/test/omega_SIS_%d%d%s.csv' % (ii, jj, l)
-                    fmu = 'glv/test/mu_SIS_%d%d%s.csv' % (ii, jj, l)
-                    fg = 'glv/test/g_SIS_%d%d%s.csv' % (ii, jj, l)
-                    generate_timeseries_noise([i, j, int(time.time())], fts, fomega, fg, fmu, SIS=True)
-
-"""

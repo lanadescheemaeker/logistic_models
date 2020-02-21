@@ -16,7 +16,6 @@ class ELIFE():
     COLOR_CYCLE = cycler(color=seaborn.color_palette('colorblind'))
 
 def set_elife_settings():
-    # font = {'family': 'Arial', 'size': 9}
     font = {'family': 'Open Sans', 'size': ELIFE.FONTSIZE}
     mpl.rc('font', **font)
     mpl.rc('legend', handlelength=1)

@@ -1,0 +1,20 @@
+,KL,NCT
+Langevin linear,inf,0.21498086936267838
+Langevin sqrt,,1.3332680912779146e-111
+Langevin linear sqrt,inf,0.002221053411686361
+Ricker linear,inf,6.141093812488285e-06
+Arato linear,inf,0.13416396052714968
+$\sigma$ = 0.01,10480462.360181442,5.206795086e-315
+$\sigma$ = 0.1,inf,1.2877142541057885e-10
+$\sigma$ = 0.2,inf,0.49985483453267543
+$\sigma$ = 0.25,inf,0.20224978952132874
+$\sigma$ = 0.3,inf,0.039661209555064914
+fundamental $\delta t$ = 0.0005,inf,0.020855924483369016
+fundamental $\delta t$ = 0.001,inf,0.003665272200380998
+fundamental $\delta t$ = 0.005,inf,0.004759683341805593
+fundamental $\delta t$ = 0.01,inf,0.0038648632602192273
+sampling $\delta$t = 0.005,inf,4.1251215518753924e-47
+sampling $\delta$t = 0.01,inf,3.954513209352486e-50
+sampling $\delta$t = 0.025,inf,7.279550694474527e-22
+sampling $\delta$t = 0.05,inf,6.173186858666334e-08
+sampling $\delta$t = 0.25,inf,6.173186858666334e-08

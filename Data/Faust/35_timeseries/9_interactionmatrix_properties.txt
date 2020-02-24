@@ -1,0 +1,12 @@
+Maximum value=0.998578052286245
+Minimum value=-1
+Arc number=595
+PEP=40
+Connectance=0.05
+Number of interactions=437
+Mean interaction strength=0.2568
+Number of mutualisms=8
+Number of competitions=18
+Number of exploitations=32
+Number of commensalisms=150
+Number of amensalisms=229

@@ -1,0 +1,10 @@
+Arc number= 595 
+ PEP= 15.96 
+ Connectance= 0.05 
+ Number of interactions= 428 
+ Mean interaction strength= 0.2603 
+ Number of mutualisms= 2 
+ Number of competitions= 47 
+ Number of exploitations= 18 
+ Number of commensalisms= 57 
+ Number of amensalisms= 304

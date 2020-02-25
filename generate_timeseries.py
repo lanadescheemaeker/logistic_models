@@ -106,9 +106,8 @@ def test_validity_Jacobian():
     return np.max(abs((numJac - Jac)/Jac)) < 1e-6
 
 class Timeseries():
-    def __init__(self, params, model = MODEL.GLV, noise_implementation=NOISE.LANGEVIN_LINEAR,
-                         dt=0.01, T=100, tskip = 0,
-                         f=0, seed=None):
+    def __init__(self, params, model=MODEL.GLV, noise_implementation=NOISE.LANGEVIN_LINEAR, dt=0.01, T=100, tskip=0,
+                 f=0, seed=None):
         self.params = params
         self.model = model
         self.noise_implementation = noise_implementation
@@ -124,6 +123,10 @@ class Timeseries():
 
         self.init_Nspecies_Nmetabolites()
 
+        self.deterministic_step = self.deterministic_step_function()
+        self.stochastic_step = self.stochastic_step_function()
+        self.add_step = self.add_step_function()
+
         if self.model == MODEL.GLV:
             self.x = np.copy(self.params['initial_condition'])
         elif self.model == MODEL.QSMI:
@@ -132,7 +135,7 @@ class Timeseries():
 
         self.x_ts = np.copy(self.x)
 
-        if f!= 0:
+        if f != 0:
             self.write_header()
 
         self.integrate()
@@ -166,16 +169,16 @@ class Timeseries():
                 raise KeyError('Parameter %s needs to be specified for the %s model and %s noise implementation.' % (
                     par, self.model.name, self.noise_implementation.name))
 
-
         # check whether matrix shapes are correct
         if self.model == MODEL.GLV:
-            if not np.all(len(row) == len(self.params['interaction_matrix']) for row in self.params['interaction_matrix']):
+            if not np.all(len(row) == len(self.params['interaction_matrix']) for row in
+                          self.params['interaction_matrix']):
                 raise ValueError('Interaction matrix is not square.')
 
             for parname in ['immigration_rate', 'growth_rate', 'initial_condition']:
                 if np.any(self.params[parname].shape != (self.params['interaction_matrix'].shape[0], 1)):
                     raise ValueError('%s has the incorrect shape: %s instead of (%d,1)' % (
-                    parname, str(self.params[parname].shape), self.params['interaction_matrix'].shape[0]))
+                        parname, str(self.params[parname].shape), self.params['interaction_matrix'].shape[0]))
 
     def write_header(self):
         # Write down header in file f
@@ -195,114 +198,131 @@ class Timeseries():
 
     def init_Nspecies_Nmetabolites(self):
         if self.model == MODEL.GLV:
-            self.Nspecies = len(self.params['interaction_matrix']) # number of species
-            self.Nmetabolites = 0 # number of metabolites, 0 in the GLV models
+            self.Nspecies = len(self.params['interaction_matrix'])  # number of species
+            self.Nmetabolites = 0  # number of metabolites, 0 in the GLV models
         elif self.model == MODEL.QSMI:
-            self.Nspecies = len(self.params['d']) # number of species
-            self.Nmetabolites = len(self.params['dm']) # number of metabolites
+            self.Nspecies = len(self.params['d'])  # number of species
+            self.Nmetabolites = len(self.params['dm'])  # number of metabolites
 
     def integrate(self):
         # If noise is Ito, first generate brownian motion.
         if self.noise_implementation == NOISE.ARATO_LINEAR:
             self.xt = np.zeros_like(self.params['initial_condition'])
-            self.bm = brownian(np.zeros(len(self.params['initial_condition'])),
-                               int(self.T /self.dt), self.dt, 1, out=None)
+            self.bm = brownian(np.zeros(len(self.params['initial_condition'])), int(self.T / self.dt), self.dt, 1,
+                               out=None)
 
-        # dataframe where timeseries will be saved
-        self.x_ts = pd.DataFrame(columns=['time'] + ['species_%d' % i for i in range(1, self.Nspecies + 1)])
-        self.x_ts['time'] = (self.dt * (self.tskip + 1)
-                             * np.arange(0, int(self.T / (self.dt * (self.tskip + 1)))) )
-        self.x_ts.set_index('time', inplace=True)
+        x_ts = np.zeros([int(self.T / (self.dt * (self.tskip + 1))), self.Nspecies])
 
         # set initial condition
-        self.x_ts.iloc[0] = self.x.flatten()
+        x_ts[0] = self.x.flatten()
 
         # Integrate ODEs according to model and noise
-        for i, x_t in enumerate(self.x_ts.index.tolist()[1:]):
+        for i in range(1, int(self.T / (self.dt * (self.tskip + 1)))):
             for j in range(self.tskip + 1):
-                self.add_step(i*(self.tskip + 1) + j)
-
-                if np.any(np.isnan(self.x) | ~np.isfinite(self.x)):
-                    self.x_ts.reset_index(inplace=True)
-                    return
+                self.add_step(self, i * (self.tskip + 1) + j)
 
             # Save abundances
             if self.f != 0:
-                self.write_abundances_to_file(i*(self.tskip + 1) + j)
+                self.write_abundances_to_file(i * (self.tskip + 1) + j)
 
-            self.x_ts.loc[x_t] = self.x.flatten()
+            x_ts[i] = self.x.flatten()
 
-        self.x_ts.reset_index(inplace=True)
+            if np.all(np.isnan(self.x)):
+                break
+
+        # dataframe to save timeseries
+        self.x_ts = pd.DataFrame(x_ts, columns=['species_%d' % i for i in range(1, self.Nspecies + 1)])
+        self.x_ts['time'] = (self.dt * (self.tskip + 1) * np.arange(0, int(self.T / (self.dt * (self.tskip + 1)))))
+
         return
 
-    def add_step(self, i):
+    def add_step_function(self):
         if self.model == MODEL.GLV:
-            if ('LANGEVIN' in self.noise_implementation.name
-                or 'MILSTEIN' in self.noise_implementation.name):
+            if ('LANGEVIN' in self.noise_implementation.name or 'MILSTEIN' in self.noise_implementation.name):
+                def func(self, i):
+                    # print(type(deterministic_step))
 
-                dx_det = self.deterministic_step()
-                dx_stoch = self.stochastic_step()
+                    dx_det = self.deterministic_step(self)
+                    dx_stoch = self.stochastic_step(self)
 
-                self.x += dx_det + dx_stoch
+                    self.x += dx_det + dx_stoch
 
-                # abundance cannot be negative
-                self.x = self.x.clip(min=0)
+                    # abundance cannot be negative
+                    self.x = self.x.clip(min=0)
 
             elif 'RICKER' in self.noise_implementation.name:
-                self.ricker_step()
+                def func(self, i):
+                    self.ricker_step()
 
             elif 'ARATO' in self.noise_implementation.name:
-                self.arato_step(i)
+                def func(self, i):
+                    self.arato_step(i)
 
         elif self.model == MODEL.QSMI:
+            def func(self, i):
+                dx_det, dy_det = self.deterministic_step()
 
-            dx_det, dy_det = self.deterministic_step()
+                # TODO implement the stochastic version of QMSI
 
-            # TODO implement the stochastic version of QMSI
+                self.x += dx_det
+                self.y += dy_det
 
-            self.x += dx_det
-            self.y += dy_det
+                self.x = self.x.clip(min=0)
+                self.y = self.y.clip(min=0)
 
-            self.x = self.x.clip(min=0)
-            self.y = self.y.clip(min=0)
+        return func
 
-    def deterministic_step(self):
+    def deterministic_step_function(self):
         if self.model == MODEL.GLV:
-            with np.errstate(over='ignore'):
-                dx = (self.params['interaction_matrix'].dot(self.x) * self.x + self.params['immigration_rate'] +
-                    self.params['growth_rate'] * self.x) * self.dt
+            def func(self):
+                return (self.params['interaction_matrix'].dot(self.x) * self.x + self.params['immigration_rate'] +
+                        self.params['growth_rate'] * self.x) * self.dt
 
-            return dx
         elif self.model == MODEL.QSMI:
             if self.noise_implementation == NOISE.LANGEVIN_CONSTANT:
-                dx = self.x * (self.params['psi'].dot(self.y) - self.params['d']) * self.dt
-                dy = (self.params['g'] - self.params['dm'] * self.y - self.y * self.params['kappa'].dot(self.x) + \
-                     ((self.params['phi'].dot(self.x)).reshape([self.Nmetabolites, self.Nmetabolites])).dot(self.y)) * self.dt
-            return dx, dy
+                def func(self):
+                    dx = self.x * (self.params['psi'].dot(self.y) - self.params['d']) * self.dt
+                    dy = (self.params['g'] - self.params['dm'] * self.y - self.y * self.params['kappa'].dot(self.x) + (
+                    (self.params['phi'].dot(self.x)).reshape([self.Nmetabolites, self.Nmetabolites])).dot(
+                        self.y)) * self.dt
+                    return dx, dy
 
-    def stochastic_step(self):
+        return func
+
+    def stochastic_step_function(self):
         if self.model == MODEL.GLV:
             if self.noise_implementation == NOISE.LANGEVIN_LINEAR:
-                dx = self.params['noise_linear'] * self.x * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape)
+                def func(self):
+                    return self.params['noise_linear'] * self.x * np.sqrt(self.dt) * np.random.normal(0, 1,
+                                                                                                      self.x.shape)
             elif self.noise_implementation == NOISE.GROWTH_AND_INTERACTION_LINEAR:
-                dx = (self.params['noise_linear'] * self.x * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape) + \
-                     (self.params['noise_interaction'] *
-                      np.random.normal(0, 1, self.params['interaction_matrix'].shape)).dot(self.x) \
-                     * self.x * np.sqrt(self.dt))
+                def func(self):
+                    return (
+                    self.params['noise_linear'] * self.x * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape) + (
+                    self.params['noise_interaction'] * np.random.normal(0, 1,
+                                                                        self.params['interaction_matrix'].shape)).dot(
+                        self.x) * self.x * np.sqrt(self.dt))
             elif self.noise_implementation == NOISE.LANGEVIN_SQRT:
-                dx = self.params['noise_sqrt'] * np.sqrt(self.x) * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape)
+                def func(self):
+                    return self.params['noise_sqrt'] * np.sqrt(self.x) * np.sqrt(self.dt) * np.random.normal(0, 1,
+                                                                                                             self.x.shape)
             elif self.noise_implementation == NOISE.LANGEVIN_LINEAR_SQRT:
-                dx = self.params['noise_linear'] * self.x * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape) + \
-                     self.params['noise_sqrt'] * np.sqrt(self.x) * np.sqrt(self.dt) * np.random.normal(0, 1,
-                                                                                                       self.x.shape)
+                def func(self):
+                    return self.params['noise_linear'] * self.x * np.sqrt(self.dt) * np.random.normal(0, 1,
+                                                                                                      self.x.shape) + \
+                           self.params['noise_sqrt'] * np.sqrt(self.x) * np.sqrt(self.dt) * np.random.normal(0, 1,
+                                                                                                             self.x.shape)
             elif self.noise_implementation == NOISE.SQRT_MILSTEIN:
-                dW = np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape)
-                dx = np.sqrt(self.params['noise_sqrt'] * self.x) * dW + self.params['noise_sqrt'] ** 2 / 4 * (
+                def func(self):
+                    dW = np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape)
+                    return np.sqrt(self.params['noise_sqrt'] * self.x) * dW + self.params['noise_sqrt'] ** 2 / 4 * (
                         dW ** 2 - self.dt ** 2)
-            elif self.noise_implementation == NOISE.LANGEVIN_CONSTANT:
-                dx = self.params['noise_constant'] * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape)
 
-            return dx
+            elif self.noise_implementation == NOISE.LANGEVIN_CONSTANT:
+                def func(self):
+                    return self.params['noise_constant'] * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape)
+
+            return func
 
     def ricker_step(self):
         if self.noise_implementation == NOISE.RICKER_LINEAR:
@@ -310,9 +330,8 @@ class Timeseries():
                 b = np.ones(self.x.shape)
             else:
                 b = np.exp(self.params['noise_linear'] * np.sqrt(self.dt) * np.random.normal(0, 1, self.x.shape))
-            self.x = b * self.x * np.exp(
-                self.params['interaction_matrix'].dot(self.x
-                        + np.linalg.inv(self.params['interaction_matrix']).dot(self.params['growth_rate'])) * self.dt)
+            self.x = b * self.x * np.exp(self.params['interaction_matrix'].dot(
+                self.x + np.linalg.inv(self.params['interaction_matrix']).dot(self.params['growth_rate'])) * self.dt)
         else:
             raise ValueError('No implementation for "%s"' % self.noise_implementation.name)
 
@@ -322,8 +341,8 @@ class Timeseries():
 
             t = i * self.dt
 
-            Y = self.params['growth_rate'] * t - self.params['noise_linear'] ** 2 / 2 * t \
-                + self.params['interaction_matrix'].dot(self.xt) + self.params['noise_linear'] * self.bm[:, i].reshape(
+            Y = self.params['growth_rate'] * t - self.params['noise_linear'] ** 2 / 2 * t + self.params[
+                'interaction_matrix'].dot(self.xt) + self.params['noise_linear'] * self.bm[:, i].reshape(
                 self.x.shape)  # noise * np.random.normal(0, 1, initcond.shape)
             self.x = self.params['initial_condition'] * np.exp(Y)
 

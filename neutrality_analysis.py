@@ -14,17 +14,26 @@ def BrayCurtis_neutrality(x):
 
     return braycurtis(neutral, x)
 
-def KullbackLeibler(x, y):
-    normx = x / sum(x)
-    normy = y / sum(y)
+def KullbackLeibler(x, y, verbose=False):
+    normx = x / np.sum(x)
+    normy = y / np.sum(y)
 
-    if np.any(y == 0):
-        print("y is zero")
-        return
+    y[y == 0] = 1e-5
+    #if np.any(y == 0):
+    #    print("y is zero")
+    #    return 0
+
+    if verbose:
+        print('normx', normx)
+        print('normy', normy)
+        print('normx/normy', normx / normy)
+        print('log(normx/normy)', np.log(normx/normy))
 
     KL = np.sum(np.where(normy != 0, normx * np.log(normx / normy), 0))
-    if KL < 0:
+    # use normx * log(normx / normy) values unless normy = 0, then use 0
+    if KL < -1e-6:
         print("NEGATIVE KULLBACK LEIBLER!")
+    elif KL < 0:
         return 0
     else:
         return KL
@@ -32,13 +41,15 @@ def KullbackLeibler(x, y):
 def KullbackLeibler_neutrality(y_ts, verbose=False):
     if isinstance(y_ts, pd.DataFrame):
         cols = [col for col in y_ts.columns if col.startswith('species')]
-        y_ts = y_ts[cols].dropna(how='all', axis='index').values
+        y_ts = y_ts[cols].values
 
     if np.all(y_ts == y_ts[0, 0]):
+        if verbose:
+            print("All species are equal")
         return np.nan
 
     S = len(y_ts[0])
-    mean = np.nanmean(y_ts, axis=0)
+    mean = np.mean(y_ts, axis=0)
     mean_N = np.mean(mean)
 
     # x bar = J/S
@@ -49,31 +60,10 @@ def KullbackLeibler_neutrality(y_ts, verbose=False):
         for j in range(S):
             cov[i, j] = np.mean((y_ts[:, i] - mean[i]) * (y_ts[:, j] - mean[j]))
 
-    if np.all(cov == 0):
-        return np.nan
-
     cov_diag0 = np.copy(cov);
     np.fill_diagonal(cov_diag0, 0)
     cov_N = np.sum(cov_diag0) / S / (S - 1) * np.ones([S, S])
     np.fill_diagonal(cov_N, np.mean(np.diag(cov)))
-
-    eig = np.linalg.eigvals(cov);
-    eig = eig[eig != 0];
-
-    log_pseudodet = np.sum(np.log(eig))
-    if log_pseudodet > 700:
-        return np.nan
-    else:
-        pseudodet = np.exp(log_pseudodet)
-
-    eig = np.linalg.eigvals(cov_N);
-    eig = eig[eig != 0];
-    
-    log_pseudodet_N = np.sum(np.log(eig))
-    if log_pseudodet_N > 700:
-        return np.nan
-    else:
-        pseudodet_N = np.exp(log_pseudodet)
 
     trace_term = np.trace(np.dot(np.linalg.inv(cov_N), cov))
     mean_term = (((mean_N - mean).T).dot(np.linalg.inv(cov_N))).dot(mean_N - mean)
@@ -81,10 +71,17 @@ def KullbackLeibler_neutrality(y_ts, verbose=False):
     # Shermann Morisson
     d = np.mean(np.diag(cov))  # diagonal term
     o = np.sum(cov_diag0) / S / (S - 1)  # offdiagonal term
-    
+
     if np.log(d - o) * S < 700:
         det_cov_N = (d - o) ** S * (1 + float(S) * float(o) / float(d - o))
+        log_det_cov_N = np.log(det_cov_N)
     else: # overflow
+        log_det_cov_N = np.log(d - o) * S + np.log((1 + float(S) * float(o) / float(d - o)))
+        det_cov_N = np.exp(log_det_cov_N)
+
+    if np.isnan(log_det_cov_N):
+        if verbose:
+            print("overflow (d = %.3E, o = %.3E" % (d, o))
         return np.nan
 
     det_cov = np.linalg.det(cov)
@@ -93,11 +90,26 @@ def KullbackLeibler_neutrality(y_ts, verbose=False):
         determinant_term = (S * (np.log(np.mean(np.abs(cov_N))) - np.log(np.mean(np.abs(cov)))) + np.log(
             np.linalg.det(cov_N / np.mean(np.abs(cov_N)))) - np.log(np.linalg.det(cov / np.mean(np.abs(cov)))))
     else:
-        determinant_term = np.log(det_cov_N) - np.log(np.linalg.det(cov))
+        determinant_term = log_det_cov_N - np.log(np.linalg.det(cov))
 
     KL = 1 / 2 * (trace_term + mean_term + rank_term + determinant_term)
 
     if verbose:
+        eig = np.linalg.eigvals(cov);
+        eig = eig[eig != 0];
+
+        log_pseudodet = np.sum(np.log(eig))
+        if log_pseudodet > 700:
+            return np.nan
+        else:
+            pseudodet = np.exp(log_pseudodet)
+
+        eig = np.linalg.eigvals(cov_N);
+        eig = eig[eig != 0];
+
+        log_pseudodet_N = np.sum(np.log(eig))
+        pseudodet_N = np.exp(log_pseudodet)
+
         print("cov", cov[:4, :4])
         print("trace", trace_term)
         print("rank", rank_term)
@@ -115,7 +127,10 @@ def KullbackLeibler_neutrality(y_ts, verbose=False):
         print("eig", eig)
     return KL
 
-def JensenShannon(x, y):
+def JensenShannon(x, y, verbose=False):
+    if verbose:
+        print("Kullback Leibler x and (x+y)/2:", KullbackLeibler(x, (x + y) / 2.0, verbose))
+        print("Kullback Leibler y and (x+y)/2:", KullbackLeibler(y, (x + y) / 2.0, verbose))
     return np.sqrt(0.5 * KullbackLeibler(x, (x + y) / 2.0) + 0.5 * KullbackLeibler(y, (x + y) / 2.0))
 
 def test_compare_braycurtis_definitions():
@@ -127,3 +142,9 @@ def test_compare_braycurtis_definitions():
     print("The Bray-Curtis distance of the scipy.spatial.distance package is:", bc1)
     print("The Bray-Curtis distance ( sum(abs(x-y)) / sum(x+y) ) is:", bc2)
     print("The difference between both definitions is ", bc1 - bc2)
+
+def Pielou_evenness_index(x):
+    p = x / np.sum(x)
+    HShannon = - np.sum(np.log(p ** p))
+    Hmax = np.log(len(x))
+    return HShannon/Hmax

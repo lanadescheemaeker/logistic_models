@@ -2,9 +2,11 @@ from matplotlib.offsetbox import AnchoredText
 from scipy.optimize import curve_fit
 from scipy import stats, signal
 
-from generate_timeseries import *
 from smooth_spline import get_natural_cubic_spline_model
 import statsmodels.formula.api as smf
+
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
 
 def noise_color(data_input): # TODO previously noise_slope
     """ Returns panda dataframe with the slope of the noise of the species of which the timeseries is given in input file f"""
@@ -66,7 +68,7 @@ def noise_color(data_input): # TODO previously noise_slope
             p_lin, cov = np.polyfit(frq, f, deg=1, cov=True)
 
             results.loc[c]['slope_linear'] = p_lin[0]
-            results.loc[c]['std_slope_linear'] = cov[0, 0]
+            results.loc[c]['std_slope_linear'] = np.sqrt(cov[0, 0])
 
             # confidence in model
             df = pd.DataFrame(columns=['frq', 'f'])
@@ -240,10 +242,10 @@ def compare_noise_implementations():
 
 def reproduce_timeseries_Faust():
     fts = 'reproduce_translate_Faust/Faust_repro3b.csv'
-    #fomega = np.loadtxt('../enterotypes_ibm/Rickermatrices-Faust/9_interactionmatrix.txt')
+    #fomega = np.loadtxt('../../Data/Faust/Rickermatrices/9_interactionmatrix.txt')
     fomega = np.loadtxt('reproduce_translate_Faust/omega3.txt')
 
-    #forig = '../enterotypes_ibm/timeseries-Faust/1_timeseries/1_timeseries.txt'
+    #forig = '../../Data/Faust/1_timeseries/1_timeseries.txt'
     #m = np.mean(np.loadtxt(forig), axis=1, keepdims=True)
     #fg = -fomega.dot(m)
 
@@ -655,7 +657,53 @@ if False:
             else:
                 print('path not found')
 
+def test_effect_subsampling_noisecolor():
+    from brownian import brownian
+    N = 10000
+
+    ts = brownian(np.zeros(1), N, 1, 1).flatten()
+    #ts = np.sin(np.linspace(0,100,10000)) + np.random.normal(0,0.05,10000)
+
+    print(ts.shape)
+
+    plt.plot(range(N), ts)
+    plt.show()
+
+    frq, f = signal.periodogram(ts)
+
+    # frq = frq.astype(float)
+    # f = f.astype(float)
+
+    mask = (f > 0) & (frq > 0)
+
+    frq = frq[mask]
+    f = f[mask]
+
+    frq = np.log10(frq)
+    f = np.log10(np.abs(f))
+
+    frq10, f10 = signal.periodogram(ts[::10])
+
+    # frq = frq.astype(float)
+    # f = f.astype(float)
+
+    mask = (f10 > 0) & (frq10 > 0)
+
+    frq10 = frq10[mask]
+    f10 = f10[mask]
+
+    frq10 = np.log10(frq10/10)
+    f10 = np.log10(np.abs(f10))
+
+    plt.scatter(frq, f, label='orig', alpha=0.3)
+    plt.scatter(frq10, f10, label='sampled', alpha=0.3)
+
+    plt.show()
+
+
 if __name__ == "__main__":
+    test_effect_subsampling_noisecolor()
+
     #generate_timeseries_noise_loop_parameters()
     #compare_noise_profiles('results2/data_SIS_')
     #compare_noise_implementations()
@@ -664,8 +712,8 @@ if __name__ == "__main__":
 
     #reproduce_timeseries_Faust()
 
-    N = 100
-    folder = 'reproduce_translate_Faust/'
+    #N = 100
+    #folder = 'reproduce_translate_Faust/'
 
     #fomega = np.random.uniform(0, 0.1, [N, N])
     #fomega *= np.random.choice([0, 1], [N, N], p=[0.8, 0.2])

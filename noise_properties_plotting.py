@@ -1,9 +1,13 @@
 import matplotlib as mpl
-import generate_timeseries
 import make_colormap as mc
 import matplotlib
 import matplotlib.cm as cm
 from matplotlib import gridspec
+
+import sys
+sys.path.insert(1, '../sglv_timeseries')
+
+import sglv_timeseries.glv.Timeseries
 
 from matplotlib.colors import Normalize
 from make_colormap import *
@@ -591,9 +595,9 @@ class PlotNoiseColorComparison():
 def main():
     print('test plotting')
 
-    ts = generate_timeseries.main().timeseries
+    ts = sglv_timeseries.glv.Timeseries.main().timeseries
 
-    ts2 = generate_timeseries.main().timeseries
+    ts2 = sglv_timeseries.glv.Timeseries.main().timeseries
 
     fig = PlotTimeseriesComparison([ts, ts2])
 

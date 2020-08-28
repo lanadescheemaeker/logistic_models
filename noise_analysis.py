@@ -7,6 +7,8 @@ import statsmodels.formula.api as smf
 
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
+import numpy as np
+import pandas as pd
 
 def noise_color(data_input): # TODO previously noise_slope
     """ Returns panda dataframe with the slope of the noise of the species of which the timeseries is given in input file f"""
